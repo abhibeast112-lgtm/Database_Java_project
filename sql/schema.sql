@@ -3,16 +3,16 @@ USE subscription_system;
 
 CREATE TABLE IF NOT EXISTS customers (
     customer_id INT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(150) NOT NULL UNIQUE,
-    phone VARCHAR(20)
+    name VARCHAR(100) NOT NULL CHECK (CHAR_LENGTH(TRIM(name)) >= 2),
+    email VARCHAR(150) NOT NULL UNIQUE CHECK (email REGEXP '^[A-Za-z0-9](?:[A-Za-z0-9._%+-]*[A-Za-z0-9])?@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\\.[A-Za-z]{2,}$'),
+    phone VARCHAR(10) NOT NULL CHECK (phone REGEXP '^[0-9]{10}$')
 );
 
 CREATE TABLE IF NOT EXISTS plans (
     plan_id INT PRIMARY KEY AUTO_INCREMENT,
-    plan_name VARCHAR(100) NOT NULL UNIQUE,
+    plan_name VARCHAR(100) NOT NULL UNIQUE CHECK (CHAR_LENGTH(TRIM(plan_name)) >= 2),
     price DECIMAL(10,2) NOT NULL CHECK (price >= 0),
-    duration_days INT NOT NULL CHECK (duration_days > 0)
+    duration_days INT NOT NULL CHECK (duration_days > 0 AND duration_days <= 36500)
 );
 
 CREATE TABLE IF NOT EXISTS subscriptions (

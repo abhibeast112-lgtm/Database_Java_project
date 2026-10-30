@@ -1,9 +1,7 @@
 package com.subscriptionsystem.ui;
-
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.subscriptionsystem.database.DBConnection;
-
 import javax.swing.*;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
@@ -11,6 +9,12 @@ import javax.swing.border.LineBorder;
 import javax.swing.plaf.basic.BasicComboBoxRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.AWTEventListener;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Ellipse2D;
+import java.awt.geom.Point2D;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.time.LocalDate;
@@ -22,9 +26,9 @@ import java.util.*;
 import java.util.List;
 
 public class Main {
-    private static final Color DARK_BG = Color.decode("#08090D");
-    private static final Color DARK_CARD = Color.decode("#171A24");
-    private static final Color DARK_INPUT = Color.decode("#202535");
+    private static final Color DARK_BG = Color.decode("#030d35");
+    private static final Color DARK_CARD = Color.decode("#262116");
+    private static final Color DARK_INPUT = Color.decode("#E8E0D2");
     private static final Color DARK_BORDER = Color.decode("#343B52");
     private static final Color COBALT = Color.decode("#2547C8");
     private static final Color LIGHT_BG = Color.decode("#F8F0E5");
@@ -38,11 +42,23 @@ public class Main {
             DateTimeFormatter.ofPattern("uuuu-MM-dd")
                     .withResolverStyle(ResolverStyle.STRICT);
 
+    private static final java.util.regex.Pattern NAME_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z][A-Za-z .'-]{1,99}$");
+    private static final java.util.regex.Pattern EMAIL_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9._%+-]*[A-Za-z0-9])?@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\\.[A-Za-z]{2,}$");
+    private static final java.util.regex.Pattern PHONE_PATTERN =
+            java.util.regex.Pattern.compile("^\\d{10}$");
+    private static final java.util.regex.Pattern PLAN_NAME_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z][A-Za-z0-9 _+'&/.-]{1,99}$");
+    private static final BigDecimal MAX_DECIMAL_AMOUNT =
+            new BigDecimal("99999999.99");
+
     private static boolean dark = true;
     private static JFrame frame;
     private static JPanel root, sidebar, content, header;
     private static JLabel pageTitle, pageSubtitle, statusLabel;
     private static JButton themeButton;
+    private static AmbientGlowOverlay glowOverlay;
     private static final CardLayout pageLayout = new CardLayout();
     private static final Map<String, JButton> navButtons = new LinkedHashMap<>();
     private static final Map<String, JLabel> counts = new LinkedHashMap<>();
@@ -98,6 +114,10 @@ public class Main {
             root.add(sidebar, BorderLayout.WEST);
             root.add(right, BorderLayout.CENTER);
             frame.setContentPane(root);
+
+            glowOverlay = new AmbientGlowOverlay(frame);
+            frame.setGlassPane(glowOverlay);
+            glowOverlay.setVisible(true);
 
             showPage("Overview");
             applyTheme();
@@ -401,6 +421,13 @@ public class Main {
         showPage(pageTitle.getText().equals("Overview")
                 ? "Overview" : pageTitle.getText());
 
+        if (glowOverlay != null) {
+            glowOverlay.applyTheme(dark);
+            if (!glowOverlay.isVisible()) {
+                glowOverlay.setVisible(true);
+            }
+        }
+
         frame.getContentPane().setBackground(background());
         frame.repaint();
     }
@@ -456,6 +483,12 @@ public class Main {
 
     private static String pretty(String value) {
         return switch (value) {
+            case "name" -> "Customer Name";
+            case "email" -> "Email Address (@ Required)";
+            case "phone" -> "Phone Number (10 Digits)";
+            case "plan_name" -> "Plan Name";
+            case "price" -> "Price ($)";
+            case "amount" -> "Payment Amount ($)";
             case "customer_id" -> "Customer";
             case "plan_id" -> "Plan";
             case "subscription_id" -> "Subscription";
@@ -816,13 +849,13 @@ public class Main {
                     input.setFont(new Font("SansSerif", Font.PLAIN, 16));
                     input.setPreferredSize(new Dimension(240, 44));
                     input.putClientProperty("JTextField.placeholderText", switch (field) {
-                        case "name" -> "Enter customer full name";
-                        case "email" -> "Enter email address (e.g. user@example.com)";
-                        case "phone" -> "Enter phone number";
+                        case "name" -> "Enter full name (letters only, e.g. Aarav Sharma)";
+                        case "email" -> "Enter valid email (e.g. user@example.com)";
+                        case "phone" -> "Enter 10-digit phone number (e.g. 9876543210)";
                         case "plan_name" -> "Enter plan name (e.g. Pro Monthly)";
-                        case "price" -> "Enter price (e.g. 29.99)";
+                        case "price" -> "Enter price up to 2 decimals (e.g. 29.99)";
                         case "duration_days" -> "Enter duration in days (e.g. 30)";
-                        case "amount" -> "Enter payment amount (e.g. 29.99)";
+                        case "amount" -> "Enter payment amount > 0 (e.g. 29.99)";
                         default -> pretty(field);
                     });
                     yield input;
@@ -1134,8 +1167,8 @@ public class Main {
                 String val = rawValues.getOrDefault(field, "");
                 if (val.isBlank()) {
                     JOptionPane.showMessageDialog(frame,
-                            "Please provide a valid value for \"" + pretty(field) + "\".",
-                            "Missing Information",
+                            "Please provide a value for \"" + pretty(field) + "\". All fields are mandatory.",
+                            "Missing Required Information",
                             JOptionPane.WARNING_MESSAGE);
                     return false;
                 }
@@ -1145,9 +1178,76 @@ public class Main {
             for (String field : spec.fields) {
                 String val = rawValues.get(field);
                 switch (field) {
+                    case "name" -> {
+                        if (val.length() < 2 || val.length() > 100) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Customer Name must be between 2 and 100 characters long.",
+                                    "Invalid Customer Name", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        if (!NAME_PATTERN.matcher(val).matches()) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Customer Name must start with a letter and contain only letters, spaces, dots (.), hyphens (-), or apostrophes (').",
+                                    "Invalid Customer Name", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        sqlParams.add(val);
+                    }
+                    case "email" -> {
+                        if (val.length() > 150) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Email Address cannot exceed 150 characters.",
+                                    "Invalid Email Address", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        int atIndex = val.indexOf('@');
+                        if (atIndex <= 0 || atIndex != val.lastIndexOf('@')) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Email Address must contain a single '@' symbol with a username before it and a domain after it (e.g. user@example.com).",
+                                    "Invalid Email Address", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        if (!EMAIL_PATTERN.matcher(val).matches()) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Invalid Email Address format: \"" + val + "\".\n"
+                                    + "Please enter a valid email in proper order: username@domain.com (e.g. name@domain.com).",
+                                    "Invalid Email Address", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        sqlParams.add(val.toLowerCase(Locale.ROOT));
+                    }
+                    case "phone" -> {
+                        if (!PHONE_PATTERN.matcher(val).matches()) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Phone Number must be exactly 10 digits (0-9 only, no spaces or symbols).\n"
+                                    + "Entered length: " + val.length() + " characters.",
+                                    "Invalid Phone Number", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        sqlParams.add(val);
+                    }
+                    case "plan_name" -> {
+                        if (val.length() < 2 || val.length() > 100) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Plan Name must be between 2 and 100 characters long.",
+                                    "Invalid Plan Name", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        if (!PLAN_NAME_PATTERN.matcher(val).matches()) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Plan Name must start with a letter and contain only letters, numbers, spaces, or standard punctuation.",
+                                    "Invalid Plan Name", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        sqlParams.add(val);
+                    }
                     case "customer_id", "plan_id", "subscription_id" -> {
                         try {
-                            sqlParams.add(Integer.parseInt(val));
+                            int id = Integer.parseInt(val);
+                            if (id <= 0) {
+                                throw new NumberFormatException("ID must be positive");
+                            }
+                            sqlParams.add(id);
                         } catch (NumberFormatException ex) {
                             JOptionPane.showMessageDialog(frame,
                                     "Please select a valid " + pretty(field) + " from the dropdown.",
@@ -1158,9 +1258,9 @@ public class Main {
                     case "duration_days" -> {
                         try {
                             int days = Integer.parseInt(val);
-                            if (days <= 0) {
+                            if (days <= 0 || days > 36500) {
                                 JOptionPane.showMessageDialog(frame,
-                                        "Duration (Days) must be a positive integer greater than 0.",
+                                        "Duration (Days) must be a positive whole number between 1 and 36,500.",
                                         "Validation Error", JOptionPane.WARNING_MESSAGE);
                                 return false;
                             }
@@ -1175,16 +1275,31 @@ public class Main {
                     case "price", "amount" -> {
                         try {
                             BigDecimal dec = new BigDecimal(val);
-                            if (dec.compareTo(BigDecimal.ZERO) < 0) {
+                            boolean isAmount = field.equals("amount");
+                            if (isAmount ? dec.compareTo(BigDecimal.ZERO) <= 0 : dec.compareTo(BigDecimal.ZERO) < 0) {
                                 JOptionPane.showMessageDialog(frame,
-                                        pretty(field) + " cannot be negative. Please enter 0 or a positive decimal amount.",
+                                        pretty(field) + (isAmount
+                                                ? " must be greater than 0 (e.g. 29.99)."
+                                                : " cannot be negative. Please enter 0 or a positive amount."),
+                                        "Validation Error", JOptionPane.WARNING_MESSAGE);
+                                return false;
+                            }
+                            if (dec.scale() > 2) {
+                                JOptionPane.showMessageDialog(frame,
+                                        pretty(field) + " can have at most 2 decimal places (e.g. 19.99).",
+                                        "Validation Error", JOptionPane.WARNING_MESSAGE);
+                                return false;
+                            }
+                            if (dec.compareTo(MAX_DECIMAL_AMOUNT) > 0) {
+                                JOptionPane.showMessageDialog(frame,
+                                        pretty(field) + " cannot exceed 99,999,999.99.",
                                         "Validation Error", JOptionPane.WARNING_MESSAGE);
                                 return false;
                             }
                             sqlParams.add(dec);
                         } catch (NumberFormatException ex) {
                             JOptionPane.showMessageDialog(frame,
-                                    pretty(field) + " must be a valid non-negative decimal number (e.g. 19.99).",
+                                    pretty(field) + " must be a valid decimal number (e.g. 19.99).",
                                     "Validation Error", JOptionPane.WARNING_MESSAGE);
                             return false;
                         }
@@ -1210,10 +1325,37 @@ public class Main {
                             return false;
                         }
                     }
+                    case "status" -> {
+                        Set<String> allowed = spec.table.equals("subscriptions")
+                                ? Set.of("ACTIVE", "CANCELLED", "EXPIRED")
+                                : Set.of("PENDING", "COMPLETED", "FAILED");
+                        if (!allowed.contains(val)) {
+                            JOptionPane.showMessageDialog(frame,
+                                    "Please select a valid Status (" + String.join(", ", allowed) + ").",
+                                    "Invalid Status", JOptionPane.WARNING_MESSAGE);
+                            return false;
+                        }
+                        sqlParams.add(val);
+                    }
                     default -> sqlParams.add(val);
                 }
             }
             return true;
+        }
+
+        private void handleSqlWriteError(String action, SQLException ex) {
+            boolean duplicate = ex.getErrorCode() == 1062
+                    || (ex.getMessage() != null && ex.getMessage().toLowerCase(Locale.ROOT).contains("duplicate"));
+            if (duplicate) {
+                String hint = switch (spec.table) {
+                    case "customers" -> "A customer with this Email Address already exists. Please use a unique email.";
+                    case "plans" -> "A plan with this Plan Name already exists. Please choose a unique plan name.";
+                    default -> "A record with these unique details already exists.";
+                };
+                showError(action + " — Duplicate Record", new SQLException(hint, ex));
+            } else {
+                showError(action, ex);
+            }
         }
 
         private void insertRecord() {
@@ -1236,7 +1378,7 @@ public class Main {
                         label + " record inserted successfully.",
                         "Success", JOptionPane.INFORMATION_MESSAGE);
             } catch (SQLException ex) {
-                showError("Insert failed", ex);
+                handleSqlWriteError("Insert failed", ex);
             }
         }
 
@@ -1268,7 +1410,7 @@ public class Main {
                         label + " record updated successfully.",
                         "Updated", JOptionPane.INFORMATION_MESSAGE);
             } catch (SQLException ex) {
-                showError("Update failed", ex);
+                handleSqlWriteError("Update failed", ex);
             }
         }
 
@@ -1335,6 +1477,221 @@ public class Main {
                 }
             }
             setStatus("Form cleared");
+        }
+    }
+
+    /**
+     * Reusable transparent overlay that renders a smooth, cursor-following
+     * ambient radial glow across the entire window (sidebar and main content)
+     * without intercepting mouse events or repainting the full interface.
+     */
+    static class AmbientGlowOverlay extends JComponent {
+        private static final float GLOW_RADIUS = 220f;
+        private static final float EASE_FACTOR = 0.18f;
+        private static final float SNAP_THRESHOLD = 0.35f;
+        private static final int TIMER_DELAY_MS = 16; // ~60 FPS
+
+        private static final float[] GRADIENT_FRACTIONS = {
+                0.0f, 0.25f, 0.52f, 0.78f, 1.0f
+        };
+
+        // Dark mode: deep cobalt blue (#2547C8) with soft bright center fading to transparent
+        private static final Color[] DARK_GLOW_COLORS = {
+                withAlpha(COBALT, 64),
+                withAlpha(COBALT, 45),
+                withAlpha(COBALT, 24),
+                withAlpha(COBALT, 8),
+                withAlpha(COBALT, 0)
+        };
+
+        // Light mode: gentle burgundy (#6E2038) blending naturally into cream background (#F8F0E5)
+        private static final Color[] LIGHT_GLOW_COLORS = {
+                withAlpha(BURGUNDY, 38),
+                withAlpha(BURGUNDY, 26),
+                withAlpha(BURGUNDY, 13),
+                withAlpha(BURGUNDY, 4),
+                withAlpha(BURGUNDY, 0)
+        };
+
+        private final JFrame hostFrame;
+        private final javax.swing.Timer animationTimer;
+        private float currentX = 520f;
+        private float currentY = 380f;
+        private float targetX = 520f;
+        private float targetY = 380f;
+        private boolean hasInitialCursorSample = false;
+        private boolean darkTheme = true;
+
+        AmbientGlowOverlay(JFrame hostFrame) {
+            this.hostFrame = hostFrame;
+            setOpaque(false);
+            setFocusable(false);
+            setRequestFocusEnabled(false);
+
+            this.animationTimer = new javax.swing.Timer(TIMER_DELAY_MS, e -> stepAnimation());
+            this.animationTimer.setCoalesce(true);
+
+            AWTEventListener globalMouseTracker = event -> {
+                if (event instanceof MouseEvent me) {
+                    handleMouseEvent(me);
+                }
+            };
+            Toolkit.getDefaultToolkit().addAWTEventListener(
+                    globalMouseTracker,
+                    AWTEvent.MOUSE_MOTION_EVENT_MASK | AWTEvent.MOUSE_EVENT_MASK);
+
+            java.awt.event.MouseAdapter localAdapter = new java.awt.event.MouseAdapter() {
+                @Override
+                public void mouseMoved(MouseEvent e) {
+                    handleMouseEvent(e);
+                }
+
+                @Override
+                public void mouseDragged(MouseEvent e) {
+                    handleMouseEvent(e);
+                }
+
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    handleMouseEvent(e);
+                }
+            };
+            addMouseMotionListener(localAdapter);
+            addMouseListener(localAdapter);
+
+            addComponentListener(new ComponentAdapter() {
+                @Override
+                public void componentResized(ComponentEvent e) {
+                    Point mousePos = getMousePosition(true);
+                    if (mousePos != null) {
+                        updateCursorTarget(mousePos.x, mousePos.y);
+                    } else if (!hasInitialCursorSample && getWidth() > 0 && getHeight() > 0) {
+                        float cx = getWidth() * 0.45f;
+                        float cy = getHeight() * 0.42f;
+                        float prevX = currentX;
+                        float prevY = currentY;
+                        currentX = targetX = cx;
+                        currentY = targetY = cy;
+                        repaintGlowRegion(prevX, prevY, currentX, currentY);
+                    }
+                }
+            });
+        }
+
+        private static Color withAlpha(Color base, int alpha) {
+            return new Color(base.getRed(), base.getGreen(), base.getBlue(),
+                    Math.max(0, Math.min(255, alpha)));
+        }
+
+        /**
+         * Returning false ensures Swing's LightweightDispatcher passes all clicks,
+         * hover states, hand cursors, table selections, and scroll wheel events
+         * directly through to the underlying UI components.
+         */
+        @Override
+        public boolean contains(int x, int y) {
+            return false;
+        }
+
+        void applyTheme(boolean isDark) {
+            this.darkTheme = isDark;
+            repaintGlowRegion(currentX, currentY, currentX, currentY);
+        }
+
+        void updateCursorTarget(float x, float y) {
+            if (!hasInitialCursorSample) {
+                hasInitialCursorSample = true;
+            }
+            this.targetX = x;
+            this.targetY = y;
+            if (!animationTimer.isRunning()) {
+                animationTimer.start();
+            }
+        }
+
+        private void handleMouseEvent(MouseEvent me) {
+            if (!isShowing()) return;
+            int id = me.getID();
+            if (id != MouseEvent.MOUSE_MOVED
+                    && id != MouseEvent.MOUSE_DRAGGED
+                    && id != MouseEvent.MOUSE_ENTERED) {
+                return;
+            }
+            Component src = me.getComponent();
+            if (src == null) return;
+            if (src != hostFrame && !SwingUtilities.isDescendingFrom(src, hostFrame)) {
+                return;
+            }
+            Point pt = SwingUtilities.convertPoint(src, me.getPoint(), this);
+            if (pt.x >= 0 && pt.y >= 0 && pt.x <= getWidth() && pt.y <= getHeight()) {
+                updateCursorTarget(pt.x, pt.y);
+            }
+        }
+
+        private void stepAnimation() {
+            float prevX = currentX;
+            float prevY = currentY;
+
+            float dx = targetX - currentX;
+            float dy = targetY - currentY;
+            double dist = Math.hypot(dx, dy);
+
+            if (dist <= SNAP_THRESHOLD) {
+                currentX = targetX;
+                currentY = targetY;
+                animationTimer.stop();
+            } else {
+                currentX += dx * EASE_FACTOR;
+                currentY += dy * EASE_FACTOR;
+            }
+
+            repaintGlowRegion(prevX, prevY, currentX, currentY);
+        }
+
+        private void repaintGlowRegion(float x1, float y1, float x2, float y2) {
+            int pad = (int) Math.ceil(GLOW_RADIUS + 4f);
+            int minX = Math.max(0, (int) Math.floor(Math.min(x1, x2)) - pad);
+            int minY = Math.max(0, (int) Math.floor(Math.min(y1, y2)) - pad);
+            int maxX = Math.min(getWidth(), (int) Math.ceil(Math.max(x1, x2)) + pad);
+            int maxY = Math.min(getHeight(), (int) Math.ceil(Math.max(y1, y2)) + pad);
+            if (maxX > minX && maxY > minY) {
+                repaint(minX, minY, maxX - minX, maxY - minY);
+            } else {
+                repaint();
+            }
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            if (getWidth() <= 0 || getHeight() <= 0) return;
+
+            Graphics2D g2 = (Graphics2D) g.create();
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                        RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING,
+                        RenderingHints.VALUE_RENDER_QUALITY);
+
+                Color[] palette = (darkTheme == dark ? dark : darkTheme)
+                        ? DARK_GLOW_COLORS
+                        : LIGHT_GLOW_COLORS;
+
+                RadialGradientPaint gradient = new RadialGradientPaint(
+                        new Point2D.Float(currentX, currentY),
+                        GLOW_RADIUS,
+                        GRADIENT_FRACTIONS,
+                        palette);
+
+                g2.setPaint(gradient);
+                float diameter = GLOW_RADIUS * 2f;
+                g2.fill(new Ellipse2D.Float(
+                        currentX - GLOW_RADIUS,
+                        currentY - GLOW_RADIUS,
+                        diameter,
+                        diameter));
+            } finally {
+                g2.dispose();
+            }
         }
     }
 }
